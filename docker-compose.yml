@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: redistress
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/001_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./sql/002_seed_sources.sql:/docker-entrypoint-initdb.d/02_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/redistress
+      GHL_WEBHOOK_URL: ${GHL_WEBHOOK_URL:-}
+      GHL_API_KEY: ${GHL_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  scraper_daily:
+    build: .
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/redistress
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["jobs"]
+    command: python -m jobs.runner --job daily_scrape_all
+
+  scraper_score:
+    build: .
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/redistress
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["jobs"]
+    command: python -m jobs.runner --job daily_score_all
+
+volumes:
+  pgdata:
