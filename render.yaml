@@ -1,48 +1,26 @@
 services:
-  # ── Web API ──────────────────────────────────────────────────
   - type: web
     name: redistress-api
     runtime: python
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: redistress-db
-          property: connectionString
+        sync: false
       - key: GHL_WEBHOOK_URL
         sync: false
       - key: GHL_API_KEY
         sync: false
     healthCheckPath: /health
-
-  # ── Hourly foreclosure check ─────────────────────────────────
-  - type: cron
-    name: redistress-hourly-foreclosure
-    runtime: python
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    schedule: "0 * * * *"
-    startCommand: python -m jobs.runner --job hourly_foreclosure
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: redistress-db
-          property: connectionString
-
-  # ── Daily full scrape (2 AM MST = 9 AM UTC) ─────────────────
   - type: cron
     name: redistress-daily-scrape
     runtime: python
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    buildCommand: pip install -r requirements.txt
     schedule: "0 9 * * *"
     startCommand: python -m jobs.runner --job daily_scrape_all
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: redistress-db
-          property: connectionString
-
-  # ── Daily scoring (after scrape, 4 AM MST = 11 AM UTC) ──────
+        sync: false
   - type: cron
     name: redistress-daily-score
     runtime: python
@@ -51,40 +29,4 @@ services:
     startCommand: python -m jobs.runner --job daily_score_all
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: redistress-db
-          property: connectionString
-
-  # ── Link orphans (after scoring) ────────────────────────────
-  - type: cron
-    name: redistress-link-orphans
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    schedule: "30 11 * * *"
-    startCommand: python -m jobs.runner --job link_orphans
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: redistress-db
-          property: connectionString
-
-  # ── Weekly GHL push (Monday 6 AM MST = 1 PM UTC) ────────────
-  - type: cron
-    name: redistress-ghl-push
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    schedule: "0 13 * * 1"
-    startCommand: python -m jobs.runner --job push_hot_leads
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: redistress-db
-          property: connectionString
-      - key: GHL_WEBHOOK_URL
         sync: false
-      - key: GHL_API_KEY
-        sync: false
-
-databases:
-  - name: redistress-db
-    plan: starter
