@@ -35,7 +35,7 @@ class MayPotenzaTrusteeScraper(BaseScraper):
     Source: https://www.maypotenza.com/trustee-sales/
     """
 
-    source_key = "maricopa_recorder_foreclosure"
+    source_key = "maypotenza_trustee_sales"
     county = "Maricopa"
     doc_type = "foreclosure"
 
