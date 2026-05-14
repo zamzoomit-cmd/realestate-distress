@@ -1,6 +1,4 @@
-"""
-May Potenza Trustee Sale Scraper - Fixed version
-"""
+"""May Potenza Trustee Sale Scraper - Fixed HTML parser"""
 import json, re, logging
 from typing import Optional
 from bs4 import BeautifulSoup
@@ -22,74 +20,51 @@ class MayPotenzaTrusteeScraper(BaseScraper):
         try:
             resp = self.get(self.URL)
             soup = BeautifulSoup(resp.text, "html.parser")
-            text = soup.get_text(" ", strip=True)
             
-            # Find all recorder numbers
-            rec_numbers = re.findall(r'Recorder\'?s #[:\s]+(\d{4}-\d+)', text)
-            addresses = re.findall(r'Property Address[:\s]+(.+?)(?:Place of Sale|County:|Trustor:|Parcel)', text)
-            parcels = re.findall(r'Parcel #[:\s]+([\d\-]+)', text)
-            trustors = re.findall(r'Trustor[:\s]+(.+?)(?:Parcel|Beneficiary|Opening)', text)
-            auction_dates = re.findall(r'(\d{2}/\d{2}/\d{4}\s+\d+:\d+\s+[apm]+)', text)
-            opening_bids = re.findall(r'Opening Bid Amount[:\s]+\$?([\d,\.]+)', text)
-            statuses = re.findall(r'STATUS\s+(\w+)', text)
-
-            log.info("Found %d recorder numbers on page", len(rec_numbers))
-cd ~/Downloads/realestate-distress
-cat > scrapers/maricopa/maypotenza_scraper.py << 'ENDOFFILE'
-"""
-May Potenza Trustee Sale Scraper - Fixed version
-"""
-import json, re, logging
-from typing import Optional
-from bs4 import BeautifulSoup
-from core.base_scraper import BaseScraper
-from core.enrichment import find_or_create_property
-from core.address_utils import normalize_apn
-from core.config import get_cursor
-
-log = logging.getLogger("scraper.maypotenza")
-
-class MayPotenzaTrusteeScraper(BaseScraper):
-    source_key = "maypotenza_trustee_sales"
-    county = "Maricopa"
-    doc_type = "foreclosure"
-    URL = "https://www.maypotenza.com/trustee-sales/"
-
-    def fetch_records(self):
-        records = []
-        try:
-            resp = self.get(self.URL)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            text = soup.get_text(" ", strip=True)
+            # Find all property detail sections
+            detail_divs = soup.find_all("div", class_=re.compile("property-details"))
+            log.info("Found %d property detail sections", len(detail_divs))
             
-            # Find all recorder numbers
-            rec_numbers = re.findall(r'Recorder\'?s #[:\s]+(\d{4}-\d+)', text)
-            addresses = re.findall(r'Property Address[:\s]+(.+?)(?:Place of Sale|County:|Trustor:|Parcel)', text)
-            parcels = re.findall(r'Parcel #[:\s]+([\d\-]+)', text)
-            trustors = re.findall(r'Trustor[:\s]+(.+?)(?:Parcel|Beneficiary|Opening)', text)
-            auction_dates = re.findall(r'(\d{2}/\d{2}/\d{4}\s+\d+:\d+\s+[apm]+)', text)
-            opening_bids = re.findall(r'Opening Bid Amount[:\s]+\$?([\d,\.]+)', text)
-            statuses = re.findall(r'STATUS\s+(\w+)', text)
+            for div in detail_divs:
+                try:
+                    text = div.get_text(" ", strip=True)
+                    
+                    # Get parent to find auction date and status
+                    wrapper = div.find_parent("div", class_=re.compile("wrapper"))
+                    full_text = wrapper.get_text(" ", strip=True) if wrapper else text
+                    
+                    rec_num = self._find(full_text, r"Recorder'?s #[:\s<>br/]*([0-9]{4}-[0-9]+)")
+                    if not rec_num:
+                        continue
+                    
+                    status = self._find(full_text, r"STATUS\s+(\w+)")
+                    if status and status.upper() in ("CANCELED", "CANCELLED"):
+                        continue
 
-            log.info("Found %d recorder numbers on page", len(rec_numbers))
+                    records.append({
+                        "_source_url": self.URL,
+                        "recorder_number": rec_num,
+                        "property_address": self._find(text, r"Property Address[:\s]+([^\n]+?)(?:Place of Sale|County|Trustor|Parcel|$)"),
+                        "parcel": self._find(text, r"Parcel #[:\s]+([\d\-]+)"),
+                        "trustor": self._find(text, r"Trustor[:\s]+([^\n]+?)(?:Parcel|Beneficiary|Opening|$)"),
+                        "opening_bid": self._find(text, r"Opening Bid Amount[:\s]+\$?([\d,\.]+)"),
+                        "auction_datetime": self._find(full_text, r"(\d{2}/\d{2}/\d{4}\s+\d+:\d+\s+[apm]+)"),
+                        "status": status or "SALE",
+                        "county_raw": self._find(text, r"County[:\s]+([^\n]+?)(?:Trustor|Parcel|$)"),
+                    })
+                except Exception as e:
+                    log.debug("Parse error: %s", e)
 
-            for i, rec_num in enumerate(rec_numbers):
-                status = statuses[i] if i < len(statuses) else "SALE"
-                if status.upper() in ("CANCELED", "CANCELLED"):
-                    continue
-                records.append({
-                    "_source_url": self.URL,
-                    "recorder_number": rec_num,
-                    "property_address": addresses[i].strip() if i < len(addresses) else None,
-                    "parcel": parcels[i] if i < len(parcels) else None,
-                    "trustor": trustors[i].strip() if i < len(trustors) else None,
-                    "auction_datetime": auction_dates[i] if i < len(auction_dates) else None,
-                    "opening_bid": opening_bids[i] if i < len(opening_bids) else None,
-                    "status": status,
-                })
+            log.info("Parsed %d active listings", len(records))
         except Exception as e:
-            log.error("Error: %s", e, exc_info=True)
+            log.error("Fetch error: %s", e, exc_info=True)
         return records
+
+    def _find(self, text, pattern):
+        m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        return re.sub(r"\s+", " ", m.group(1)).strip() or None
 
     def get_doc_key(self, raw):
         return raw.get("recorder_number", "")
@@ -101,14 +76,16 @@ class MayPotenzaTrusteeScraper(BaseScraper):
         doc_num = raw.get("recorder_number")
         if not doc_num:
             return None
-        apn = normalize_apn(raw.get("parcel",""), "Maricopa")
+        county_raw = raw.get("county_raw", "")
+        county = "Pima" if "pima" in county_raw.lower() else "Maricopa"
+        apn = normalize_apn(raw.get("parcel", ""), county)
         try:
             from datetime import datetime
-            auction_date = datetime.strptime(raw.get("auction_datetime","").strip(), "%m/%d/%Y %I:%M %p").date().isoformat()
+            auction_date = datetime.strptime(raw["auction_datetime"].strip(), "%m/%d/%Y %I:%M %p").date().isoformat()
         except:
             auction_date = self.parse_date(raw.get("auction_datetime"))
         return {
-            "county": "Maricopa",
+            "county": county,
             "document_number": doc_num,
             "notice_type": "NTS",
             "auction_date": auction_date,
@@ -122,7 +99,112 @@ class MayPotenzaTrusteeScraper(BaseScraper):
 
     def store_record(self, parsed):
         property_id = find_or_create_property(
-            county="Maricopa", apn=parsed.get("apn"),
+            county=parsed["county"], apn=parsed.get("apn"),
+            address_raw=parsed.get("property_address"),
+            owner_name=parsed.get("borrower_name"),
+cat > scrapers/maricopa/maypotenza_scraper.py << 'ENDOFFILE'
+"""May Potenza Trustee Sale Scraper - Fixed HTML parser"""
+import json, re, logging
+from typing import Optional
+from bs4 import BeautifulSoup
+from core.base_scraper import BaseScraper
+from core.enrichment import find_or_create_property
+from core.address_utils import normalize_apn
+from core.config import get_cursor
+
+log = logging.getLogger("scraper.maypotenza")
+
+class MayPotenzaTrusteeScraper(BaseScraper):
+    source_key = "maypotenza_trustee_sales"
+    county = "Maricopa"
+    doc_type = "foreclosure"
+    URL = "https://www.maypotenza.com/trustee-sales/"
+
+    def fetch_records(self):
+        records = []
+        try:
+            resp = self.get(self.URL)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            
+            # Find all property detail sections
+            detail_divs = soup.find_all("div", class_=re.compile("property-details"))
+            log.info("Found %d property detail sections", len(detail_divs))
+            
+            for div in detail_divs:
+                try:
+                    text = div.get_text(" ", strip=True)
+                    
+                    # Get parent to find auction date and status
+                    wrapper = div.find_parent("div", class_=re.compile("wrapper"))
+                    full_text = wrapper.get_text(" ", strip=True) if wrapper else text
+                    
+                    rec_num = self._find(full_text, r"Recorder'?s #[:\s<>br/]*([0-9]{4}-[0-9]+)")
+                    if not rec_num:
+                        continue
+                    
+                    status = self._find(full_text, r"STATUS\s+(\w+)")
+                    if status and status.upper() in ("CANCELED", "CANCELLED"):
+                        continue
+
+                    records.append({
+                        "_source_url": self.URL,
+                        "recorder_number": rec_num,
+                        "property_address": self._find(text, r"Property Address[:\s]+([^\n]+?)(?:Place of Sale|County|Trustor|Parcel|$)"),
+                        "parcel": self._find(text, r"Parcel #[:\s]+([\d\-]+)"),
+                        "trustor": self._find(text, r"Trustor[:\s]+([^\n]+?)(?:Parcel|Beneficiary|Opening|$)"),
+                        "opening_bid": self._find(text, r"Opening Bid Amount[:\s]+\$?([\d,\.]+)"),
+                        "auction_datetime": self._find(full_text, r"(\d{2}/\d{2}/\d{4}\s+\d+:\d+\s+[apm]+)"),
+                        "status": status or "SALE",
+                        "county_raw": self._find(text, r"County[:\s]+([^\n]+?)(?:Trustor|Parcel|$)"),
+                    })
+                except Exception as e:
+                    log.debug("Parse error: %s", e)
+
+            log.info("Parsed %d active listings", len(records))
+        except Exception as e:
+            log.error("Fetch error: %s", e, exc_info=True)
+        return records
+
+    def _find(self, text, pattern):
+        m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        return re.sub(r"\s+", " ", m.group(1)).strip() or None
+
+    def get_doc_key(self, raw):
+        return raw.get("recorder_number", "")
+
+    def get_source_url(self, raw):
+        return f"https://recorder.maricopa.gov/recdocdata/GetDocuments.aspx?recno={raw.get('recorder_number','')}"
+
+    def parse_record(self, raw):
+        doc_num = raw.get("recorder_number")
+        if not doc_num:
+            return None
+        county_raw = raw.get("county_raw", "")
+        county = "Pima" if "pima" in county_raw.lower() else "Maricopa"
+        apn = normalize_apn(raw.get("parcel", ""), county)
+        try:
+            from datetime import datetime
+            auction_date = datetime.strptime(raw["auction_datetime"].strip(), "%m/%d/%Y %I:%M %p").date().isoformat()
+        except:
+            auction_date = self.parse_date(raw.get("auction_datetime"))
+        return {
+            "county": county,
+            "document_number": doc_num,
+            "notice_type": "NTS",
+            "auction_date": auction_date,
+            "trustee_name": "May Potenza Baran & Gillespie",
+            "borrower_name": self.clean_text(raw.get("trustor")),
+            "property_address": self.clean_text(raw.get("property_address")),
+            "apn": apn,
+            "opening_bid": self.parse_money(raw.get("opening_bid")),
+            "raw_data": raw,
+        }
+
+    def store_record(self, parsed):
+        property_id = find_or_create_property(
+            county=parsed["county"], apn=parsed.get("apn"),
             address_raw=parsed.get("property_address"),
             owner_name=parsed.get("borrower_name"),
             source_id=parsed.get("source_id"),
