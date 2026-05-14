@@ -22,7 +22,7 @@ class MayPotenzaTrusteeScraper(BaseScraper):
             soup = BeautifulSoup(resp.text, "html.parser")
             
             # Find all property detail sections
-            detail_divs = soup.find_all("div", class_=re.compile("property-details"))
+            detail_divs = soup.find_all("div", class_="property-details col-lg-8 col-sm-12")
             log.info("Found %d property detail sections", len(detail_divs))
             
             for div in detail_divs:
@@ -127,7 +127,7 @@ class MayPotenzaTrusteeScraper(BaseScraper):
             soup = BeautifulSoup(resp.text, "html.parser")
             
             # Find all property detail sections
-            detail_divs = soup.find_all("div", class_=re.compile("property-details"))
+            detail_divs = soup.find_all("div", class_="property-details col-lg-8 col-sm-12")
             log.info("Found %d property detail sections", len(detail_divs))
             
             for div in detail_divs:
