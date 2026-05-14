@@ -58,7 +58,7 @@ def find_or_create_property(
                 """
                 SELECT id, address_full FROM properties
                 WHERE county = %s
-                  AND address_full % %s
+                  AND address_full %% %s
                 LIMIT 5
                 """,
                 (county, addr_parts["address_full"]),
