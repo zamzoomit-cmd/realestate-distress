@@ -35,13 +35,15 @@ SCRAPER_REGISTRY: dict = {}
 def register_scrapers():
     """Lazy import to avoid circular deps."""
     global SCRAPER_REGISTRY
-    from scrapers.maricopa.maypotenza_scraper import MayPotenzaTrusteeScraper
     from scrapers.maricopa.scrapers import (
         MaricopaRecorderScraper,
         MaricopaAssessorCSVScraper,
         MaricopaTaxScraper,
         MaricopaCodeViolationScraper,
     )
+    from scrapers.maricopa.maypotenza_scraper import MayPotenzaTrusteeScraper
+    from scrapers.texas.bexar_scraper import BexarForeclosureScraper
+    from scrapers.texas.dallas_scraper import DallasForeclosureScraper
     from scrapers.pima.scrapers import (
         PimaRecorderScraper,
         PimaAssessorScraper,
@@ -50,8 +52,10 @@ def register_scrapers():
     )
 
     SCRAPER_REGISTRY = {
-        "maricopa_recorder_foreclosure": MaricopaRecorderScraper,
         "maypotenza_trustee_sales": MayPotenzaTrusteeScraper,
+        "bexar_foreclosure": BexarForeclosureScraper,
+        "dallas_foreclosure": DallasForeclosureScraper,
+        "maricopa_recorder_foreclosure": MaricopaRecorderScraper,
         "maricopa_assessor_csv": MaricopaAssessorCSVScraper,
         "maricopa_treasurer_tax": MaricopaTaxScraper,
         "maricopa_code_violations": MaricopaCodeViolationScraper,
