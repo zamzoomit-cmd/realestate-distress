@@ -1,4 +1,4 @@
-"""Bexar County Texas Foreclosure Scraper - Fixed 3-column parser"""
+"""Bexar County Texas Foreclosure Scraper - Clean parser"""
 import io, json, re, logging
 from datetime import date, timedelta
 from core.base_scraper import BaseScraper
@@ -15,6 +15,58 @@ def extract_pdf_text(pdf_bytes):
         log.error("PDF error: %s", e)
         return ""
 
+# Valid Bexar County cities
+VALID_CITIES = {
+    'SAN ANTONIO','ATASCOSA','BOERNE','HELOTES','SOMERSET','VON ORY',
+    'CONVERSE','ELMENDORF','ADKINS','UNIVERSAL CITY','LIVE OAK',
+    'LEON VALLEY','BALCONES HEIGHTS','KIRBY','WINDCREST','SCHERTZ',
+    'SELMA','CIBOLO','MARION','FLOR
+cd ~/Downloads/realestate-distress
+cat > scrapers/texas/bexar_scraper.py << 'ENDOFFILE'
+"""Bexar County Texas Foreclosure Scraper - Clean parser"""
+import io, json, re, logging
+from datetime import date, timedelta
+from core.base_scraper import BaseScraper
+from core.enrichment import find_or_create_property
+from core.config import get_cursor
+
+log = logging.getLogger("scraper.bexar")
+
+def extract_pdf_text(pdf_bytes):
+    try:
+        from pdfminer.high_level import extract_text
+        return extract_text(io.BytesIO(pdf_bytes))
+    except Exception as e:
+        log.error("PDF error: %s", e)
+        return ""
+
+# Valid Bexar County cities
+VALID_CITIES = {
+    'SAN ANTONIO','ATASCOSA','BOERNE','HELOTES','SOMERSET','VON ORY',
+    'CONVERSE','ELMENDORF','ADKINS','UNIVERSAL CITY','LIVE OAK',
+    'LEON VALLEY','BALCONES HEIGHTS','KIRBY','WINDCREST','SCHERTZ',
+    'SELMA','CIBOLO','MARION','FLORESVILLE','POTEET','PLEASANTON',
+    'LYTLE','NATALIA','CASTROVILLE','LYTLE','HONDO','SAN MARCOS',
+    'NEW BRAUNFELS','SEGUIN','LAREDO','LAVERNIA','STOCKDALE',
+    'FALLS CITY','POTH','KARNES CITY','KENEDY','CUERO','VICTORIA',
+    'CORPUS CHRISTI','GEORGE WEST','BEEVILLE','PLEASANTON',
+    'PEARSALL','COTULLA','UVALDE','BRACKETTVILLE','DEL RIO',
+    'EAGLE PASS','CRYSTAL CITY','CARRIZO SPRINGS','DILLEY',
+    'THREE RIVERS','JOURDANTON','PEARSALL','DIVINE','LYTLE',
+    'HILL COUNTRY VILLAGE','OLMOS PARK','TERRELL HILLS','ALAMO HEIGHTS',
+    'HOLLYWOOD PARK','SHAVANO PARK','GREY FOREST','FAIR OAKS RANCH',
+    'BULVERDE','SPRING BRANCH','CANYON LAKE','GARDEN RIDGE',
+    'TIMBERWOOD PARK','LACKLAND','LACKLAND AFB','RANDOLPH','RANDOLPH AFB',
+    'KELLY','KELLY AFB','BROOKS','BROOKS CITY','STINSON','SAN ANTOINO',
+    'VON ORMY','MACDONA','GREY FOREST','PIPE CREEK','BANDERA',
+    'KERRVILLE','FREDERICKSBURG','JOHNSON CITY','MARBLE FALLS',
+    'BURNET','LLANO','MASON','SAN SABA','BRADY','MENARD','JUNCTION',
+    'ROCKSPRINGS','UVALDE','SABINAL','HONDO','CASTROVILLE','NATALIA',
+    'LYTLE','DEVINE','MOORE','PLEASANTON','KENEDY','KARNES CITY',
+    'CUERO','YOAKUM','SHINER','GONZALES','SEGUIN','NEW BRAUNFELS',
+    'SAN MARCOS','KYLE','BUDA','AUSTIN','ROUND ROCK','CEDAR PARK',
+}
+
 class BexarForeclosureScraper(BaseScraper):
     source_key = "bexar_foreclosure"
     county = "Bexar"
@@ -30,7 +82,7 @@ class BexarForeclosureScraper(BaseScraper):
                 text = extract_pdf_text(resp.content)
                 log.info("Bexar PDF text: %d chars", len(text))
                 records = self._parse_text(text)
-                log.info("Bexar: found %d records", len(records))
+                log.info("Bexar: found %d valid records", len(records))
         except Exception as e:
             log.error("Bexar error: %s", e, exc_info=True)
         return records
@@ -43,19 +95,27 @@ class BexarForeclosureScraper(BaseScraper):
         cities = []
         if city_match:
             for line in city_match.group(1).split('\n'):
-                line = line.strip()
+                line = line.strip().upper()
                 if line and not re.match(r'^\d', line) and len(line) > 2:
                     cities.append(line)
         auction_date = self._next_first_tuesday()
         log.info("Bexar: %d doc nums, %d addresses, %d cities", len(doc_nums), len(type_addr), len(cities))
         for i, (notice_type, address) in enumerate(type_addr):
+            address = address.strip()
+            # Skip bad addresses
+            if any(x in address.upper() for x in ['MORTGAGE', 'FORECLOSURE', 'PAGE', 'CITY/TOWN', 'DOCUMENT', 'NUMBER', 'TYPE', 'ADDRESS', 'LUCY', 'COUNTY CLERK']):
+                continue
             doc_num = doc_nums[i] if i < len(doc_nums) else f"BEXAR-{i}"
+            # Get city and validate it
             city = cities[i] if i < len(cities) else "SAN ANTONIO"
+            # If city looks invalid, default to SAN ANTONIO
+            if any(x in city for x in ['MORTGAGE', 'PAGE', 'FORECLOSURE', 'DOCUMENT', 'NUMBER', 'TYPE', 'ADDRESS', 'LUCY', 'COUNTY']):
+                city = "SAN ANTONIO"
             records.append({
                 "_source_url": self.PDF_URL,
                 "document_number": doc_num,
                 "notice_type": notice_type.upper(),
-                "property_address": f"{address.strip()}, {city}, TX",
+                "property_address": f"{address}, {city}, TX",
                 "city": city,
                 "state": self.STATE,
                 "auction_date": auction_date,
@@ -92,6 +152,9 @@ class BexarForeclosureScraper(BaseScraper):
                    %(source_doc_id)s, %(source_url)s, %(notice_type)s, %(auction_date)s,
                    %(property_address)s, %(raw_data)s::jsonb)
                 ON CONFLICT (county, document_number) DO UPDATE SET
-                   auction_date = EXCLUDED.auction_date, property_id = EXCLUDED.property_id, updated_at = NOW()
-            """, {**parsed, "property_id": property_id, "raw_data": json.dumps(parsed.get("raw_data", {}))})
+                   auction_date = EXCLUDED.auction_date,
+                   property_id = EXCLUDED.property_id,
+                   updated_at = NOW()
+            """, {**parsed, "property_id": property_id,
+                  "raw_data": json.dumps(parsed.get("raw_data", {}))})
         return "new"
